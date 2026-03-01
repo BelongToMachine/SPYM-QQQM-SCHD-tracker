@@ -133,6 +133,7 @@ async function getHistory(symbol: string, range: string) {
     const result = data.chart?.result?.[0];
     if (!result) throw new Error(`No chart data for ${symbol}`);
 
+    const meta = result.meta;
     const timestamps: number[] = result.timestamp ?? [];
     const closes: (number | null)[] = result.indicators?.quote?.[0]?.close ?? [];
 
@@ -160,6 +161,32 @@ async function getHistory(symbol: string, range: string) {
             price: Math.round(close * 100) / 100,
         });
     }
+
+    // Ensure the chart always extends to the current date.
+    // Yahoo Finance only returns data for trading days, so weekends/holidays
+    // would leave the chart ending on the last trading day (e.g. Feb 27).
+    // We append a point for today using the latest known price.
+    const now = new Date();
+    let todayLabel: string;
+    if (range === "5Y") {
+        todayLabel = now.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+    } else if (range === "1Y") {
+        const mon = now.toLocaleDateString("en-US", { month: "short" });
+        const yr = String(now.getFullYear()).slice(-2);
+        todayLabel = `${mon} '${yr}`;
+    } else {
+        todayLabel = now.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    }
+
+    const lastPoint = points[points.length - 1];
+    if (lastPoint && lastPoint.date !== todayLabel) {
+        const currentPrice = meta.regularMarketPrice ?? lastPoint.price;
+        points.push({
+            date: todayLabel,
+            price: Math.round(currentPrice * 100) / 100,
+        });
+    }
+
     return points;
 }
 
