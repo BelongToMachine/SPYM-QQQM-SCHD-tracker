@@ -79,12 +79,28 @@ export async function fetchHistoricalRates(
     if (!res.ok) throw new Error(`Failed to fetch history: ${res.status}`);
     const data = await res.json();
 
-    return Object.entries(data.rates)
+    const result = Object.entries(data.rates)
         .map(([date, rates]) => ({
             date,
             rate: (rates as Record<string, number>)[to],
         }))
         .sort((a, b) => a.date.localeCompare(b.date));
+
+    // Ensure the chart always extends to the current date.
+    // Frankfurter API (ECB) only publishes rates on weekdays, so weekends/holidays
+    // would leave the chart ending on the last published day (e.g. Friday).
+    // We append a point for today using the latest known rate.
+    const todayLabel = endDate.toISOString().split("T")[0];
+    const lastPoint = result[result.length - 1];
+
+    if (lastPoint && lastPoint.date !== todayLabel) {
+        result.push({
+            date: todayLabel,
+            rate: lastPoint.rate,
+        });
+    }
+
+    return result;
 }
 
 /**
