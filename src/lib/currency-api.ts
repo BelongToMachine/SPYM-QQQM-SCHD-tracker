@@ -86,18 +86,25 @@ export async function fetchHistoricalRates(
         }))
         .sort((a, b) => a.date.localeCompare(b.date));
 
-    // Ensure the chart always extends to the current date.
+    // Ensure the chart always extends to the current date with no gaps.
     // Frankfurter API (ECB) only publishes rates on weekdays, so weekends/holidays
-    // would leave the chart ending on the last published day (e.g. Friday).
-    // We append a point for today using the latest known rate.
-    const todayLabel = endDate.toISOString().split("T")[0];
+    // would leave gaps. We fill every missing day from the last data point
+    // through today using the latest known rate.
+    const todayStr = endDate.toISOString().split("T")[0];
     const lastPoint = result[result.length - 1];
 
-    if (lastPoint && lastPoint.date !== todayLabel) {
-        result.push({
-            date: todayLabel,
-            rate: lastPoint.rate,
-        });
+    if (lastPoint && lastPoint.date < todayStr) {
+        const cursor = new Date(lastPoint.date);
+        cursor.setDate(cursor.getDate() + 1);
+
+        const endDay = new Date(todayStr);
+        while (cursor <= endDay) {
+            result.push({
+                date: cursor.toISOString().split("T")[0],
+                rate: lastPoint.rate,
+            });
+            cursor.setDate(cursor.getDate() + 1);
+        }
     }
 
     return result;

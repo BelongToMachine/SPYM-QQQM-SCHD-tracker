@@ -162,29 +162,44 @@ async function getHistory(symbol: string, range: string) {
         });
     }
 
-    // Ensure the chart always extends to the current date.
+    // Ensure the chart always extends to the current date with no gaps.
     // Yahoo Finance only returns data for trading days, so weekends/holidays
-    // would leave the chart ending on the last trading day (e.g. Feb 27).
-    // We append a point for today using the latest known price.
-    const now = new Date();
-    let todayLabel: string;
-    if (range === "5Y") {
-        todayLabel = now.toLocaleDateString("en-US", { month: "short", year: "numeric" });
-    } else if (range === "1Y") {
-        const mon = now.toLocaleDateString("en-US", { month: "short" });
-        const yr = String(now.getFullYear()).slice(-2);
-        todayLabel = `${mon} '${yr}`;
-    } else {
-        todayLabel = now.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-    }
+    // would leave gaps. We fill every missing day from the last data point
+    // through today using the latest known price.
+    if (points.length > 0 && timestamps.length > 0) {
+        const lastTimestamp = timestamps[timestamps.length - 1];
+        const lastTradingDate = new Date(lastTimestamp * 1000);
+        lastTradingDate.setHours(0, 0, 0, 0);
 
-    const lastPoint = points[points.length - 1];
-    if (lastPoint && lastPoint.date !== todayLabel) {
-        const currentPrice = meta.regularMarketPrice ?? lastPoint.price;
-        points.push({
-            date: todayLabel,
-            price: Math.round(currentPrice * 100) / 100,
-        });
+        const now = new Date();
+        now.setHours(0, 0, 0, 0);
+
+        const currentPrice = meta.regularMarketPrice ?? points[points.length - 1].price;
+        const fillPrice = Math.round(currentPrice * 100) / 100;
+
+        // Walk day-by-day from the day after last trading day through today
+        const cursor = new Date(lastTradingDate);
+        cursor.setDate(cursor.getDate() + 1);
+
+        while (cursor <= now) {
+            let dateLabel: string;
+            if (range === "5Y") {
+                dateLabel = cursor.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+            } else if (range === "1Y") {
+                const mon = cursor.toLocaleDateString("en-US", { month: "short" });
+                const yr = String(cursor.getFullYear()).slice(-2);
+                dateLabel = `${mon} '${yr}`;
+            } else {
+                dateLabel = cursor.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+            }
+
+            // Avoid duplicate labels (e.g. for 5Y/1Y where multiple days share the same label)
+            if (points[points.length - 1].date !== dateLabel) {
+                points.push({ date: dateLabel, price: fillPrice });
+            }
+
+            cursor.setDate(cursor.getDate() + 1);
+        }
     }
 
     return points;
