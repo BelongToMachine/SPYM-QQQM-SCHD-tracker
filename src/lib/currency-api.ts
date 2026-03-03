@@ -140,28 +140,42 @@ export async function fetchHistoricalRates(
         }
     }
 
-    // Ensure the chart always extends to the current date with no gaps.
-    // Frankfurter API (ECB) only publishes rates on weekdays, so weekends/holidays
-    // would leave gaps. We fill every missing day from the last data point
-    // through today using the latest known rate.
-    const todayStr = endDate.toISOString().split("T")[0];
-    const lastPoint = result[result.length - 1];
+    // Ensure the chart always has a point for every single day.
+    // Frankfurter API (ECB) only publishes rates on weekdays (missing weekends & holidays).
+    // Sometimes portions of the api data are just missing.
+    // We walk day-by-day from the startDate to endDate (today), and use the 
+    // last known rate for any missing dates.
 
-    if (lastPoint && lastPoint.date < todayStr) {
-        const cursor = new Date(lastPoint.date);
-        cursor.setDate(cursor.getDate() + 1);
+    // Create a map of the api returned dates
+    const apiRatesByDate: Record<string, number> = {};
+    result.forEach((p) => {
+        apiRatesByDate[p.date] = p.rate;
+    });
 
-        const endDay = new Date(todayStr);
-        while (cursor <= endDay) {
-            result.push({
-                date: cursor.toISOString().split("T")[0],
-                rate: lastPoint.rate,
-            });
-            cursor.setDate(cursor.getDate() + 1);
+    const filledResult: { date: string; rate: number }[] = [];
+    const endDay = new Date(endDate.toISOString().split("T")[0]);
+    const cursor = new Date(startDate.toISOString().split("T")[0]);
+
+    // find the first available rate to use as a starting fallback
+    let currentFallbackRate = result.length > 0 ? result[0].rate : 1.0;
+
+    while (cursor <= endDay) {
+        const dateStr = cursor.toISOString().split("T")[0];
+
+        if (apiRatesByDate[dateStr] !== undefined) {
+            // Un-set fallback if we have a real data point
+            currentFallbackRate = apiRatesByDate[dateStr];
         }
+
+        filledResult.push({
+            date: dateStr,
+            rate: currentFallbackRate,
+        });
+
+        cursor.setDate(cursor.getDate() + 1);
     }
 
-    return result;
+    return filledResult;
 }
 
 /**
