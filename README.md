@@ -11,9 +11,11 @@ Built with **Next.js 16**, **TypeScript**, and **Recharts**.
 ## ✨ Features
 
 ### 📊 Dashboard
-- Market overview with total market cap, top gainers/losers
-- Interactive area chart with 1W / 1M / 3M / 1Y range selectors
-- Real-time data from Yahoo Finance API
+- **Live** market overview with ETF avg performance, top gainers/losers
+- Switch between SPYM / QQQM / SCHD price charts with 1W / 1M / 3M / 1Y ranges
+- Live currency exchange rate cards (USD, CNY, HKD, TRY) from ECB
+- ETF summary table with real-time price, change, and volume
+- One-click refresh for all live data
 
 ### 📈 Stock Tracker
 - Live quotes for **SPYM**, **QQQM**, and **SCHD** ETFs

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AreaChart,
   Area,
@@ -15,110 +15,273 @@ import {
   DollarSign,
   BarChart3,
   Activity,
+  ArrowRightLeft,
+  RefreshCw,
+  Clock,
+  Zap,
 } from "lucide-react";
 import {
-  stocks,
-  indices,
-  getStockHistory,
-} from "@/lib/data";
-
-function formatCurrency(n: number): string {
-  if (n >= 1e9) return "$" + (n / 1e9).toFixed(2) + "B";
-  if (n >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
-  if (n >= 1e3) return "$" + (n / 1e3).toFixed(1) + "K";
-  return "$" + n.toFixed(2);
-}
+  fetchStockQuotes,
+  fetchStockHistory,
+  type StockQuote,
+  type PricePoint,
+} from "@/lib/stock-api";
+import {
+  TRACKED_CURRENCIES,
+  fetchLatestRates,
+  convertWithRates,
+  type TrackedCurrencyCode,
+} from "@/lib/currency-api";
 
 export default function DashboardPage() {
-  const [indexPeriod, setIndexPeriod] = useState("1M");
+  const [quotes, setQuotes] = useState<StockQuote[]>([]);
+  const [chartSymbol, setChartSymbol] = useState("SPYM");
+  const [chartPeriod, setChartPeriod] = useState("1M");
+  const [history, setHistory] = useState<PricePoint[]>([]);
 
-  const topGainer = useMemo(() => [...stocks].sort((a, b) => b.changePercent - a.changePercent)[0], []);
-  const topLoser = useMemo(() => [...stocks].sort((a, b) => a.changePercent - b.changePercent)[0], []);
-  const spHistory = useMemo(() => getStockHistory("AAPL", indexPeriod), [indexPeriod]);
+  const [currencyRates, setCurrencyRates] = useState<Record<string, number> | null>(null);
 
-  const totalMarketCap = useMemo(() => {
-    return stocks.reduce((sum, s) => {
-      const capStr = s.marketCap;
-      let val = parseFloat(capStr);
-      if (capStr.endsWith("T")) val *= 1e12;
-      else if (capStr.endsWith("B")) val *= 1e9;
-      return sum + val;
-    }, 0);
+  const [loading, setLoading] = useState(true);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+
+  // ── Fetch live ETF quotes + currency rates ──
+  const loadData = useCallback(async () => {
+    try {
+      setLoading(true);
+      const [stockData, rateData] = await Promise.all([
+        fetchStockQuotes(),
+        fetchLatestRates("USD"),
+      ]);
+      setQuotes(stockData);
+      setCurrencyRates({ USD: 1, ...rateData.rates });
+      setLastRefresh(new Date());
+    } catch (err) {
+      console.error("Dashboard load error:", err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  // ── Fetch chart history ──
+  const loadHistory = useCallback(async () => {
+    try {
+      setHistoryLoading(true);
+      const data = await fetchStockHistory(
+        chartSymbol as "SPYM" | "QQQM" | "SCHD",
+        chartPeriod
+      );
+      setHistory(data);
+    } catch (err) {
+      console.error("History load error:", err);
+      setHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [chartSymbol, chartPeriod]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
+
+  // ── Derived data ──
+  const topGainer = useMemo(
+    () =>
+      [...quotes].sort((a, b) => b.changePercent - a.changePercent)[0] ?? null,
+    [quotes]
+  );
+  const topLoser = useMemo(
+    () =>
+      [...quotes].sort((a, b) => a.changePercent - b.changePercent)[0] ?? null,
+    [quotes]
+  );
+
+  const totalValue = useMemo(
+    () => quotes.reduce((sum, q) => sum + q.price, 0),
+    [quotes]
+  );
+
+  const avgChange = useMemo(() => {
+    if (quotes.length === 0) return 0;
+    return quotes.reduce((s, q) => s + q.changePercent, 0) / quotes.length;
+  }, [quotes]);
+
+  const selectedQuote = useMemo(
+    () => quotes.find((q) => q.symbol === chartSymbol),
+    [quotes, chartSymbol]
+  );
+
+  const isUp = (selectedQuote?.change ?? 0) >= 0;
+
+  const chartData = useMemo(
+    () => history.map((h) => ({ date: h.date, price: h.price })),
+    [history]
+  );
+
+  // Currency pairs for the quick grid
+  const currencyPairs = useMemo(() => {
+    if (!currencyRates) return [];
+    return [
+      { from: "USD" as TrackedCurrencyCode, to: "CNY" as TrackedCurrencyCode, icon: "🇺🇸→🇨🇳" },
+      { from: "USD" as TrackedCurrencyCode, to: "HKD" as TrackedCurrencyCode, icon: "🇺🇸→🇭🇰" },
+      { from: "USD" as TrackedCurrencyCode, to: "TRY" as TrackedCurrencyCode, icon: "🇺🇸→🇹🇷" },
+      { from: "CNY" as TrackedCurrencyCode, to: "HKD" as TrackedCurrencyCode, icon: "🇨🇳→🇭🇰" },
+    ].map((p) => ({
+      ...p,
+      rate: convertWithRates(1, p.from, p.to, currencyRates, "USD"),
+    }));
+  }, [currencyRates]);
 
   return (
     <>
       <div className="page-header animate-fade-in">
         <h1>Dashboard</h1>
-        <p>Welcome back. Here&apos;s your market overview.</p>
+        <p style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          Welcome back. Here&apos;s your live market overview.
+          {lastRefresh && (
+            <span className="badge green" style={{ fontSize: 11 }}>
+              <Clock size={12} /> {lastRefresh.toLocaleTimeString()}
+            </span>
+          )}
+          <button
+            onClick={() => {
+              loadData();
+              loadHistory();
+            }}
+            disabled={loading}
+            style={{
+              background: "transparent",
+              border: "1px solid var(--border-color)",
+              borderRadius: "var(--radius-sm)",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              padding: "4px 8px",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 12,
+              fontFamily: "var(--font-sans)",
+              transition: "all 0.2s",
+            }}
+            aria-label="Refresh data"
+          >
+            <RefreshCw size={13} className={loading ? "spinning" : ""} />
+            Refresh
+          </button>
+        </p>
       </div>
 
       {/* ── Metric Cards ── */}
       <div className="metric-grid">
+        {/* Portfolio Pulse */}
         <div className="metric-card animate-fade-in animate-fade-in-delay-1">
           <div className="metric-icon emerald">
-            <DollarSign size={22} />
+            <Zap size={22} />
           </div>
           <div className="metric-info">
-            <div className="metric-label">Total Market Cap</div>
-            <div className="metric-value">{formatCurrency(totalMarketCap)}</div>
-            <div className="metric-change positive">
-              Tracked Stocks
+            <div className="metric-label">ETF Avg Performance</div>
+            <div className="metric-value">
+              {loading ? "—" : `${avgChange >= 0 ? "+" : ""}${avgChange.toFixed(2)}%`}
+            </div>
+            <div className={`metric-change ${avgChange >= 0 ? "positive" : "negative"}`}>
+              {avgChange >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+              Today
             </div>
           </div>
         </div>
 
+        {/* ETFs Tracked */}
         <div className="metric-card animate-fade-in animate-fade-in-delay-2">
           <div className="metric-icon cyan">
             <BarChart3 size={22} />
           </div>
           <div className="metric-info">
-            <div className="metric-label">Stocks Tracked</div>
-            <div className="metric-value">{stocks.length}</div>
+            <div className="metric-label">ETFs Tracked</div>
+            <div className="metric-value">{quotes.length || 3}</div>
             <div className="metric-change positive">
-              Active
+              <Activity size={14} /> Live
             </div>
           </div>
         </div>
 
+        {/* Top Gainer */}
         <div className="metric-card animate-fade-in animate-fade-in-delay-3">
           <div className="metric-icon emerald">
             <TrendingUp size={22} />
           </div>
           <div className="metric-info">
             <div className="metric-label">Top Gainer</div>
-            <div className="metric-value">{topGainer.symbol}</div>
-            <div className="metric-change positive">
-              <TrendingUp size={14} />+{topGainer.changePercent.toFixed(2)}%
+            <div className="metric-value">
+              {loading ? "—" : topGainer?.symbol ?? "—"}
             </div>
+            {topGainer && !loading && (
+              <div className="metric-change positive">
+                <TrendingUp size={14} />+{topGainer.changePercent.toFixed(2)}%
+              </div>
+            )}
           </div>
         </div>
 
+        {/* Top Loser */}
         <div className="metric-card animate-fade-in animate-fade-in-delay-4">
           <div className="metric-icon red">
             <TrendingDown size={22} />
           </div>
           <div className="metric-info">
             <div className="metric-label">Top Loser</div>
-            <div className="metric-value">{topLoser.symbol}</div>
-            <div className="metric-change negative">
-              <TrendingDown size={14} />
-              {topLoser.changePercent.toFixed(2)}%
+            <div className="metric-value">
+              {loading ? "—" : topLoser?.symbol ?? "—"}
             </div>
+            {topLoser && !loading && (
+              <div className="metric-change negative">
+                <TrendingDown size={14} />
+                {topLoser.changePercent.toFixed(2)}%
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* ── Chart ── */}
+      {/* ── ETF Price Chart ── */}
       <div className="card animate-fade-in" style={{ marginBottom: 24 }}>
         <div className="chart-header">
-          <span className="chart-title">Market Overview</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="chart-tabs" style={{ marginRight: 12 }}>
+              {(["SPYM", "QQQM", "SCHD"] as const).map((sym) => (
+                <button
+                  key={sym}
+                  className={`chart-tab ${chartSymbol === sym ? "active" : ""}`}
+                  onClick={() => setChartSymbol(sym)}
+                >
+                  {sym}
+                </button>
+              ))}
+            </div>
+            {selectedQuote && (
+              <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>
+                ${selectedQuote.price.toFixed(2)}{" "}
+                <span
+                  style={{
+                    color: isUp ? "var(--accent-emerald)" : "var(--accent-red)",
+                    fontSize: 13,
+                  }}
+                >
+                  {isUp ? "+" : ""}
+                  {selectedQuote.changePercent.toFixed(2)}%
+                </span>
+              </span>
+            )}
+          </div>
           <div className="chart-tabs">
             {["1W", "1M", "3M", "1Y"].map((p) => (
               <button
                 key={p}
-                className={`chart-tab ${indexPeriod === p ? "active" : ""}`}
-                onClick={() => setIndexPeriod(p)}
+                className={`chart-tab ${chartPeriod === p ? "active" : ""}`}
+                onClick={() => setChartPeriod(p)}
               >
                 {p}
               </button>
@@ -126,120 +289,198 @@ export default function DashboardPage() {
           </div>
         </div>
         <div className="chart-container">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={spHistory}>
-              <defs>
-                <linearGradient id="gradGreen" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#10b981" stopOpacity={0.3} />
-                  <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <XAxis
-                dataKey="date"
-                tick={{ fontSize: 11, fill: "#64748b" }}
-                axisLine={false}
-                tickLine={false}
-              />
-              <YAxis
-                tick={{ fontSize: 11, fill: "#64748b" }}
-                axisLine={false}
-                tickLine={false}
-                domain={["auto", "auto"]}
-              />
-              <Tooltip
-                contentStyle={{
-                  background: "#1a1f2e",
-                  border: "1px solid rgba(255,255,255,0.08)",
-                  borderRadius: 10,
-                  fontSize: 13,
-                  color: "#f1f5f9",
-                }}
-              />
-              <Area
-                type="monotone"
-                dataKey="price"
-                stroke="#10b981"
-                strokeWidth={2}
-                fill="url(#gradGreen)"
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+          {historyLoading ? (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+                color: "var(--text-muted)",
+                fontSize: 14,
+              }}
+            >
+              Loading chart data...
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData}>
+                <defs>
+                  <linearGradient id="gradDash" x1="0" y1="0" x2="0" y2="1">
+                    <stop
+                      offset="0%"
+                      stopColor={isUp ? "#10b981" : "#ef4444"}
+                      stopOpacity={0.3}
+                    />
+                    <stop
+                      offset="100%"
+                      stopColor={isUp ? "#10b981" : "#ef4444"}
+                      stopOpacity={0}
+                    />
+                  </linearGradient>
+                </defs>
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 11, fill: "#64748b" }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis
+                  tick={{ fontSize: 11, fill: "#64748b" }}
+                  axisLine={false}
+                  tickLine={false}
+                  domain={["auto", "auto"]}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: "#1a1f2e",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: 10,
+                    fontSize: 13,
+                    color: "#f1f5f9",
+                  }}
+                  formatter={(value: number | undefined) => [
+                    `$${value?.toFixed(2) ?? "—"}`,
+                    "Price",
+                  ]}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="price"
+                  stroke={isUp ? "#10b981" : "#ef4444"}
+                  strokeWidth={2}
+                  fill="url(#gradDash)"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
 
-      {/* ── Market Indices ── */}
-      <div className="card animate-fade-in" style={{ marginBottom: 24 }}>
-        <div className="chart-title" style={{ marginBottom: 16 }}>
-          <Activity size={18} style={{ display: "inline", verticalAlign: "middle", marginRight: 8 }} />
-          Market Indices
-        </div>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Index</th>
-              <th>Value</th>
-              <th>Change</th>
-              <th>% Change</th>
-            </tr>
-          </thead>
-          <tbody>
-            {indices.map((idx) => (
-              <tr key={idx.name}>
-                <td style={{ fontWeight: 600 }}>{idx.name}</td>
-                <td>{idx.value.toLocaleString()}</td>
-                <td className={idx.change >= 0 ? "positive" : "negative"}>
-                  {idx.change >= 0 ? "+" : ""}
-                  {idx.change.toFixed(2)}
-                </td>
-                <td className={idx.changePercent >= 0 ? "positive" : "negative"}>
-                  {idx.changePercent >= 0 ? "+" : ""}
-                  {idx.changePercent.toFixed(2)}%
-                </td>
+      <div className="grid-2 animate-fade-in">
+        {/* ── ETF Summary ── */}
+        <div className="card">
+          <div className="chart-title" style={{ marginBottom: 16 }}>
+            <BarChart3
+              size={18}
+              style={{
+                display: "inline",
+                verticalAlign: "middle",
+                marginRight: 8,
+              }}
+            />
+            ETF Overview
+          </div>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Name</th>
+                <th>Price</th>
+                <th>Change</th>
+                <th>Volume</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* ── Top Movers ── */}
-      <div className="card animate-fade-in">
-        <div className="chart-title" style={{ marginBottom: 16 }}>
-          <BarChart3 size={18} style={{ display: "inline", verticalAlign: "middle", marginRight: 8 }} />
-          Top Movers
+            </thead>
+            <tbody>
+              {loading
+                ? [1, 2, 3].map((i) => (
+                  <tr key={i}>
+                    <td style={{ opacity: 0.4 }}>Loading...</td>
+                    <td />
+                    <td />
+                    <td />
+                    <td />
+                  </tr>
+                ))
+                : quotes.map((q) => (
+                  <tr key={q.symbol}>
+                    <td style={{ fontWeight: 700, color: "var(--accent-emerald)" }}>
+                      {q.symbol}
+                    </td>
+                    <td style={{ color: "var(--text-secondary)" }}>{q.name}</td>
+                    <td>${q.price.toFixed(2)}</td>
+                    <td className={q.change >= 0 ? "positive" : "negative"}>
+                      {q.change >= 0 ? "+" : ""}
+                      {q.changePercent.toFixed(2)}%
+                    </td>
+                    <td style={{ color: "var(--text-secondary)" }}>{q.volume}</td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
         </div>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Symbol</th>
-              <th>Name</th>
-              <th>Price</th>
-              <th>Change</th>
-              <th>% Change</th>
-              <th>Volume</th>
-            </tr>
-          </thead>
-          <tbody>
-            {[...stocks]
-              .sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent))
-              .slice(0, 6)
-              .map((s) => (
-                <tr key={s.symbol}>
-                  <td style={{ fontWeight: 700, color: "#10b981" }}>{s.symbol}</td>
-                  <td style={{ color: "#94a3b8" }}>{s.name}</td>
-                  <td>${s.price.toFixed(2)}</td>
-                  <td className={s.change >= 0 ? "positive" : "negative"}>
-                    {s.change >= 0 ? "+" : ""}
-                    {s.change.toFixed(2)}
-                  </td>
-                  <td className={s.changePercent >= 0 ? "positive" : "negative"}>
-                    {s.changePercent >= 0 ? "+" : ""}
-                    {s.changePercent.toFixed(2)}%
-                  </td>
-                  <td style={{ color: "#94a3b8" }}>{s.volume}</td>
-                </tr>
+
+        {/* ── Live Currency Rates ── */}
+        <div className="card">
+          <div className="chart-title" style={{ marginBottom: 16 }}>
+            <ArrowRightLeft
+              size={18}
+              style={{
+                display: "inline",
+                verticalAlign: "middle",
+                marginRight: 8,
+              }}
+            />
+            Live Exchange Rates
+          </div>
+          {currencyRates ? (
+            <div style={{ display: "grid", gap: 12 }}>
+              {currencyPairs.map((pair) => (
+                <div
+                  key={`${pair.from}-${pair.to}`}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "14px 16px",
+                    background: "var(--bg-input)",
+                    borderRadius: "var(--radius-sm)",
+                    border: "1px solid var(--border-color)",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontSize: 20 }}>{pair.icon}</span>
+                    <span
+                      style={{
+                        fontWeight: 600,
+                        color: "var(--text-primary)",
+                        fontSize: 14,
+                      }}
+                    >
+                      {pair.from}/{pair.to}
+                    </span>
+                  </div>
+                  <span
+                    style={{
+                      fontFamily: "var(--font-mono)",
+                      fontWeight: 700,
+                      fontSize: 16,
+                      color: "var(--accent-cyan)",
+                    }}
+                  >
+                    {pair.rate.toFixed(4)}
+                  </span>
+                </div>
               ))}
-          </tbody>
-        </table>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "var(--text-muted)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  marginTop: 4,
+                }}
+              >
+                <Clock size={11} /> Source: European Central Bank via Frankfurter
+              </div>
+            </div>
+          ) : (
+            <div style={{ textAlign: "center", padding: 24, color: "var(--text-muted)" }}>
+              Loading rates...
+            </div>
+          )}
+        </div>
       </div>
     </>
   );
